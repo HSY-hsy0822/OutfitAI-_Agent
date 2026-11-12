@@ -21,7 +21,8 @@ func main() {
 		runMCP()
 		return
 	}
-	p := tea.NewProgram(tui.New())
+	// WithMouseCellMotion：启用鼠标事件（含滚轮），viewport 才能收到滚轮消息并滚动。
+	p := tea.NewProgram(tui.New(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		log.Fatal(err)
 	}
