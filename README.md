@@ -1,171 +1,270 @@
-# OutfitAI Agent · 穿搭推荐 Agent
+# OutfitAI Agent · AI 穿搭推荐 Agent
 
-> 一个基于 Go 的中文穿搭推荐 Agent：既能作为 **终端交互式对话助手**（Bubble Tea TUI）使用，也能作为 **MCP Server** 暴露给任意 MCP 客户端（Claude Desktop、Cursor 等）。
->
-> A Go-based Chinese outfit-recommendation Agent that runs both as an **interactive terminal chatbot** (Bubble Tea TUI) and as an **MCP Server** that any MCP client (Claude Desktop, Cursor, etc.) can consume.
+一个用 Go 编写的中文 AI 穿搭推荐 Agent。它在终端里提供交互式聊天界面（基于 [Bubble Tea](https://github.com/charmbracelet/bubbletea) 框架），通过多轮对话了解你的性别、身材、风格、场合、季节和预算，然后调用大模型**从本地衣橱数据中**挑选一整套搭配，并用大白话讲清每件单品的理由、价格和预算是否超标。
 
----
-
-## 功能特性 / Features
-
-- 🗣️ **自然语言多轮对话**：像朋友一样聊穿搭需求，每次只问最关键的 1~2 个问题，逐步收集性别、风格、场合、季节、预算等信息。
-  **Natural-language multi-turn chat**: gathers your needs conversationally, one or two key questions at a time.
-- 🧠 **大模型驱动 + 本地规则兜底**：默认调用豆包（Doubao，OpenAI 兼容接口）生成搭配；当模型未配置、超时、返回非法 JSON 或匹配不到本地商品时，自动回退到本地规则算法，**永远能给出可展示的方案**。
-  **LLM-driven with local-rule fallback**: uses Doubao (OpenAI-compatible) by default; falls back to a local algorithm whenever the model fails or is unconfigured — so a presentable outfit is always returned.
-- 🔧 **工具调用（Function Calling）**：通过 `recommend_outfits` 工具，把「生成搭配」这件事交给本地算法，模型只负责理解意图和解释结果，**不编造商品名、价格和链接**。
-  **Tool calling**: the `recommend_outfits` tool delegates outfit generation to local code; the model only understands intent and explains results, never fabricating products, prices, or links.
-- 🧥 **本地衣橱库 + 匹配打分**：从 `data/wardrobe.json` 加载商品，按「风格 4 分 / 季节 3 分 / 场景 2 分」打分，再按性别过滤、按匹配分降序取候选。
-  **Local wardrobe with scoring**: loads products from `data/wardrobe.json`, scores them (style +4 / season +3 / occasion +2), filters by gender, and ranks candidates.
-- 💰 **整套预算控制**：预算约束作用于**整套总价**，穷举各单品组合，挑出「不超预算且总分最高」的一套；预算不够时兜底取各品类最便宜的一件，超预算会明确提示。
-  **Outfit-level budget control**: budget applies to the whole outfit; it exhaustively picks the best-scoring combination under budget, falls back to the cheapest item per category, and flags over-budget results.
-- ✨ **特殊要求处理**：支持「某件换便宜点 / 省钱 / 平价」这类口语化要求，会在同品类里自动替换成更便宜的商品。
-  **Special requests**: understands phrases like "make the shoes cheaper" and swaps in a cheaper item from the same category.
-- 🔗 **打开商品链接 / 搜同款**：可一键在浏览器打开商品页，或在对应电商平台搜索同款（京东 / 淘宝 / 天猫 / 拼多多 / 唯品会）。
-  **Open link / search similar**: opens a product page in the browser, or searches the same item on JD / Taobao / Tmall / PDD / VIP.
-- 🧩 **MCP Server 模式**：以 `stdio`（JSON-RPC）方式暴露 `recommend_outfits` 和 `search_wardrobe` 两个工具，可被任何 MCP 客户端接入。
-  **MCP Server mode**: exposes `recommend_outfits` and `search_wardrobe` over stdio JSON-RPC, consumable by any MCP client.
+> **能力边界（重要）**：本项目**没有接入京东、淘宝等购物平台的实时 API**，所有商品都来自项目内置的本地衣橱文件（`data/wardrobe.json`，125 条真实商品详情页链接），程序本身无法实时联网检索商品。程序内的“搜同款”只是打开浏览器、跳转到搜索页面，由你自行查看。
 
 ---
 
-## 项目结构 / Project Structure
+## 目录
+
+- [功能特性](#功能特性)
+- [项目结构](#项目结构)
+- [工作流程](#工作流程)
+- [环境要求](#环境要求)
+- [安装与配置](#安装与配置)
+- [运行方式](#运行方式)
+- [TUI 交互说明](#tui-交互说明)
+- [MCP 服务说明](#mcp-服务说明)
+- [衣橱数据说明](#衣橱数据说明)
+- [测试说明](#测试说明)
+- [安全与隐私](#安全与隐私)
+- [免责声明](#免责声明)
+
+---
+
+## 功能特性
+
+- **终端交互界面（TUI）**：基于 Bubble Tea 的 Model-Update-View 架构，使用官方 bubbles 组件——文本输入框、可滚动对话区、等待动画（spinner），界面样式由 lipgloss 渲染。
+- **大模型驱动**：对接 OpenAI 兼容接口（本项目使用火山引擎 Ark），通过 Function Calling 自动决定何时调用穿搭推荐工具，支持多轮对话和上下文记忆。
+- **双保险机制**：大模型未配置、超时或返回异常时，自动回退到本地搭配规则，离线也能稳定出方案，程序不会因此崩溃。
+- **不编造商品**：大模型只负责“聊天和决策”，商品名称、价格、链接全部来自本地衣橱文件，模型无法凭空捏造商品。
+- **MCP 服务**：内置基于 stdio 的 MCP Server，可被 Claude Desktop、Cursor 等支持 MCP 的客户端接入，对外提供两个工具。
+- **真实商品链接**：衣橱内 125 条链接均为具体商品详情页，支持一键打开浏览器；商品下架时可一键搜同款。
+- **斜杠命令**：清空记忆、打开商品链接、搜同款、查看帮助等。
+
+---
+
+## 项目结构
 
 ```
 outfit-agent/
-├── main.go                     # 入口：默认启动 TUI，`mcp` 子命令启动 MCP server
+├── main.go                  # 程序入口：默认启动 TUI；带 mcp 参数启动 MCP Server
+├── go.mod / go.sum          # 依赖管理
+├── .env.example             # 大模型配置模板（仅占位符，不含真实密钥）
 ├── data/
-│   └── wardrobe.json           # 本地衣橱库（商品名、价格、风格、链接等）
-├── internal/
-│   ├── agent/                  # 核心：Agent、LLM 客户端、结果解析、本地规则搭配
-│   │   ├── agent.go
-│   │   └── llm.go
-│   ├── mcp/                    # MCP server：协议封装 + 两个工具
-│   │   └── server.go
-│   ├── models/                 # 数据结构：UserProfile / Product / Recommendation
-│   │   └── models.go
-│   ├── repository/             # 衣橱加载、匹配打分、候选筛选、预算解析
-│   │   └── wardrobe.go
-│   ├── tui/                    # Bubble Tea 交互界面 + 大模型对话客户端
-│   │   ├── model.go
-│   │   ├── client.go
-│   │   └── helpers.go
-│   └── utils/                  # 打开浏览器、拼搜索链接
-│       └── browser.go
-├── .env.example                # 环境变量模板（已脱敏）
-└── go.mod / go.sum
+│   └── wardrobe.json        # 本地衣橱：125 条真实商品详情页数据
+└── internal/
+    ├── tui/                 # 交互层（Bubble Tea）
+    │   ├── model.go         # Init / Update / View 三件套，界面状态与渲染
+    │   ├── client.go        # 大模型客户端、工具定义（Function Calling）
+    │   ├── helpers.go       # 工具执行、特殊需求处理、.env 加载
+    │   └── *_test.go        # 交互层测试
+    ├── agent/               # 搭配算法层
+    │   ├── agent.go         # Recommend 入口、本地搭配规则、结果解析
+    │   └── llm.go           # 大模型直连客户端（整套搭配建议）
+    ├── mcp/                 # MCP 协议层
+    │   ├── server.go        # MCP Server，注册两个工具
+    │   └── *_test.go        # MCP 测试（含真实进程 stdio 链路测试）
+    ├── repository/          # 数据层
+    │   └── wardrobe.go      # 衣橱加载、候选筛选、匹配评分、预算解析
+    ├── models/              # 共用数据结构
+    │   └── models.go        # UserProfile、Product、Recommendation 等
+    └── utils/               # 工具函数
+        └── browser.go       # 打开默认浏览器、生成搜同款链接
 ```
+
+各层职责一句话概括：`tui` 管交互，`agent` 管搭配算法，`repository` 管衣橱数据和评分，`models` 是各层共用的数据结构，`utils` 管浏览器跳转，`mcp` 把 Agent 能力封装成标准协议。
 
 ---
 
-## 快速开始 / Quick Start
+## 工作流程
 
-### 1. 环境要求 / Requirements
+一次完整的对话流程如下：
 
-- Go 1.25+
-- 一个火山引擎 Ark 账号（或任意 OpenAI 兼容接口）；不配置也能用本地规则跑通
+1. **用户输入**：在 TUI 输入框用自然语言描述需求（如“女，20 岁，163，预算 300，秋季通勤穿搭”），回车发送。
+2. **大模型决策**：对话历史发给大模型。模型判断信息是否足够：
+   - 信息不足 → 像朋友一样追问关键问题（每次只问一两个）；
+   - 信息足够 → 通过 Function Calling 调用 `recommend_outfits` 工具。
+3. **工具执行**：工具从本地衣橱中按性别、风格、季节、场合打分筛选候选商品，搭配算法生成一整套方案（含每件理由、总价、是否超预算）。
+4. **结果回传**：工具结果返回给大模型，模型用大白话把搭配思路、价格讲给用户听。
+5. **继续调整**：用户可以要求“换一套”“鞋子便宜点”“不要裙子”等，模型会带着更新后的信息再次调用工具。
+6. **异常兜底**：任何一步大模型调用失败，自动切换到本地规则出方案，保证始终有结果。
 
-### 2. 配置 / Configuration
+---
 
-复制模板并按需填写（`LLM_API_KEY` 留空则自动使用本地规则）：
+## 环境要求
+
+- [Go](https://go.dev/dl/) 1.25.0 或更高版本
+- 一个 **OpenAI 兼容的大模型接口**（本项目默认使用火山引擎 Ark，也可替换为任何兼容 `/chat/completions` 接口的服务）
+- 支持 ANSI 转义的终端（Windows Terminal、PowerShell、macOS Terminal、各类 Linux 终端均可）
+
+主要依赖：
+
+| 依赖 | 版本 | 用途 |
+|---|---|---|
+| bubbletea | v1.3.10 | TUI 框架 |
+| bubbles | v1.0.0 | 输入框、滚动区、动画等组件 |
+| lipgloss | v1.1.0 | 终端样式渲染 |
+| modelcontextprotocol/go-sdk | v1.8.0 | MCP 协议支持 |
+
+---
+
+## 安装与配置
+
+### 1. 拉取项目并安装依赖
+
+```bash
+git clone <你的仓库地址>
+cd outfit-agent
+go mod download
+```
+
+### 2. 配置大模型
+
+复制配置模板，然后填入你自己的配置：
 
 ```bash
 cp .env.example .env
 ```
 
-`.env` 内容示例（**请勿提交真实密钥到公开仓库**）：
+编辑 `.env` 文件：
 
-```ini
+```env
 LLM_BASE_URL="https://ark.cn-beijing.volces.com/api/v3"
-LLM_API_KEY="your-api-key-here"
-LLM_MODEL="your-model-or-endpoint-id"
+LLM_API_KEY="你的 API Key"
+LLM_MODEL="你的模型或 Endpoint ID"
 ```
 
-### 3. 运行 / Run
+- `LLM_BASE_URL`：OpenAI 兼容接口的基础地址
+- `LLM_API_KEY`：你的接口密钥
+- `LLM_MODEL`：模型名称或 Endpoint ID
 
-**交互式 TUI（对话助手）：**
+> 不配置 `.env` 也能运行程序，此时大模型相关功能不可用，会自动走本地规则出方案。
+
+---
+
+## 运行方式
+
+### 方式一：直接运行（不生成可执行文件）
 
 ```bash
-go run . 
+go run .
 ```
 
-**MCP Server（供 MCP 客户端接入）：**
+### 方式二：编译后运行
 
 ```bash
-go run . mcp
+go build -o outfit-agent .
+```
+
+- Linux / macOS：
+
+  ```bash
+  ./outfit-agent
+  ```
+
+- Windows（PowerShell 中当前目录的 exe 必须加 `.\` 前缀）：
+
+  ```powershell
+  .\outfit-agent.exe
+  ```
+
+### 方式三：启动 MCP Server
+
+```bash
+# Linux / macOS
+./outfit-agent mcp
+
+# Windows PowerShell
+.\outfit-agent.exe mcp
 ```
 
 ---
 
-## 交互命令 / TUI Commands
+## TUI 交互说明
 
-| 命令 / Command | 作用 / Description |
-| --- | --- |
-| `/help` | 查看命令帮助 / show help |
-| `/reset` | 清空对话记忆，重新开始 / clear conversation memory |
-| `/open <序号>` | 用默认浏览器打开某件商品的详情页 / open a product page |
-| `/search <序号>` | 在商品所属平台搜索同款 / search similar items on the platform |
-| `/quit` 或 `/exit` | 退出 / quit |
-| `Ctrl+C` | 任意时刻退出 / quit anytime |
+### 斜杠命令
 
----
+| 命令 | 作用 |
+|---|---|
+| `/help` | 查看全部命令 |
+| `/reset` | 清空对话记忆，重新开始 |
+| `/open 序号` | 用浏览器打开当前方案中指定序号的商品详情页 |
+| `/search 序号` | 用浏览器打开该商品的搜同款页面 |
+| `/quit` 或 `/exit` | 退出程序 |
 
-## MCP 工具 / MCP Tools
+### 按键与滚动
 
-### `recommend_outfits`
-
-根据用户资料从本地衣橱生成一套完整穿搭（4~6 件）。
-
-输入参数（均为字符串，可选）：
-
-| 参数 / Param | 说明 / Description |
-| --- | --- |
-| `gender` | 性别，如 男 / 女 |
-| `age` | 年龄，如 20 |
-| `height` | 身高 cm，如 163 |
-| `weight` | 体重 kg，如 55 |
-| `body_type` | 身材，如 梨形 / H型 |
-| `skin_tone` | 肤色 |
-| `style` | 风格，如 休闲 / 通勤 / 甜美 |
-| `occasion` | 场景，如 上课 / 通勤 / 约会 |
-| `season` | 季节，如 秋季 |
-| `budget` | 整套预算（元），如 300 |
-| `special_request` | 特殊调整，如 鞋子要便宜、不要裙子 |
-
-返回：`summary`（思路）、`reason`（搭配理由）、`total_price`（合计价）、`over_budget`（是否超预算）、`items`（单品清单含名称/价格/链接）、`tips`。
-
-### `search_wardrobe`
-
-按品类、商品名关键词、性别检索本地衣橱库，返回商品清单（含价格与链接），**不编造任何商品**。
-
-| 参数 / Param | 说明 / Description |
-| --- | --- |
-| `category` | 品类，如 上衣 / 裤装 / 鞋 / 外套 |
-| `keyword` | 商品名关键词 |
-| `gender` | 性别过滤，如 女 |
-| `limit` | 最多返回条数，默认 10 |
+- **回车**：发送消息
+- **Ctrl+C**：退出程序
+- **鼠标滚轮 / 方向键 ↑↓ / PgUp PgDn**：上下滚动对话历史（等待模型回复时也能翻历史）
+- 新消息到达时，对话区会自动滚动到最底部
 
 ---
 
-## 工作原理 / How It Works
+## MCP 服务说明
 
-1. **对话理解**：TUI 模式下，聊天客户端把对话历史 + 工具定义发给大模型，模型决定何时调用 `recommend_outfits`。
-2. **候选筛选**：`repository.Candidates` 先按性别过滤，再按「风格 4 分 / 季节 3 分 / 场景 2 分」打分，取前 N 件作为候选池。
-3. **搭配生成**：优先让大模型从候选里挑一套并输出 JSON；解析时要求 `keyword` 必须与本地商品名匹配（`matchProduct`），避免张冠李戴。若解析失败，回退到本地规则：按「上衣 + 下装 + 鞋（秋冬再加外套）」搭必需位置，穷举组合挑最优，预算有余再补包和配饰。
-4. **结果渲染**：结构化结果带商品名、价格、跳转链接和选择理由返回给用户。
+MCP（Model Context Protocol）以 stdio + JSON-RPC 的方式工作，把 Agent 的能力暴露给外部 MCP 客户端。服务注册了以下两个工具：
 
-> **反幻觉设计**：系统提示词明确「严禁编造商品名、价格、库存或链接，keyword 必须原样抄写候选商品名」，且解析后还会再次校验商品是否真的存在于本地库。
+| 工具名 | 功能 |
+|---|---|
+| `recommend_outfits` | 根据用户资料（性别、年龄、身材、风格、场合、季节、预算等），从本地衣橱生成一整套搭配（4~6 件），返回每件的名称、价格、理由、链接和总价 |
+| `search_wardrobe` | 按品类、商品名关键词、性别检索本地衣橱，返回商品清单（含价格和链接），不编造任何商品 |
+
+### 客户端接入示例
+
+以支持 MCP 的客户端配置为例，在其 MCP 配置文件中加入：
+
+```json
+{
+  "mcpServers": {
+    "outfit-agent": {
+      "command": "outfit-agent 的完整可执行文件路径",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+Windows 下 `command` 填写 `outfit-agent.exe` 的完整路径，例如 `D:\\path\\to\\outfit-agent.exe`。配置完成后，客户端即可通过上述两个工具调用本 Agent 的能力。
 
 ---
 
-## 安全提示 / Security Note
+## 衣橱数据说明
 
-- `.env` 已被 `.gitignore` 忽略，**切勿**把真实 `LLM_API_KEY` 写入会被提交的文件（如 `.env.example` 或代码注释）。
-- `data/wardrobe.json` 是本地商品数据，可自行增删替换；如需分享，注意其中是否包含你不想公开的链接。
+衣橱数据位于 `data/wardrobe.json`，共 **125 条**商品，每条包含：编号、名称、品类、性别、价格、风格、季节、场合、商品详情页链接、平台等字段。
+
+**性别分布**：男 54 条、女 59 条、中性 12 条
+
+**品类分布**：
+
+| 品类 | 上衣 | 裙装 | 裤装 | 外套 | 鞋 | 包 | 配饰 |
+|---|---|---|---|---|---|---|---|
+| 数量 | 27 | 12 | 20 | 29 | 20 | 11 | 6 |
+
+**覆盖风格**：休闲、简约、利落、温柔、学院、清纯、甜美、日系、御姐、轻熟、通勤、正式、复古、街头、运动、户外徒步、cleanfit、中性等。
+
+**覆盖场合**：日常、出游、运动、通勤、开会、正式场合、约会等。
 
 ---
 
-## 技术栈 / Tech Stack
+## 测试说明
 
-- [Go](https://go.dev/) 1.25
-- [Bubble Tea](https://github.com/charmbracelet/bubbletea) + Bubbles + Lip Gloss（TUI）
-- [modelcontextprotocol/go-sdk](https://github.com/modelcontextprotocol/go-sdk)（MCP）
-- 火山引擎 Ark / Doubao（OpenAI 兼容接口）
+项目附带了单元测试和链路测试，运行全部测试：
+
+```bash
+go test ./...
+```
+
+测试分为两类：
+
+- **离线测试**：不依赖网络和大模型，使用本地规则，结果稳定可复现（如 MCP 的进程内端到端测试、鼠标滚动测试等）。
+- **环境相关测试**：部分测试需要真实大模型配置（`.env`）或需要先编译出可执行文件来验证 stdio 通信链路，运行前请确认相应环境。
+
+---
+
+## 安全与隐私
+
+- `.env` 文件已在 `.gitignore` 中被忽略，**不会被提交到仓库**，API Key 不会泄露。
+- `.gitignore` 默认忽略：`.env`、`*.exe`、`*.log`。
+- 仓库中提供的 `.env.example` 只含占位符，不含任何真实密钥。
+- 项目内不包含任何运行截图或个人信息。
+
+---
+
+## 免责声明
+
+- 衣橱中的商品价格为采集时的参考估值，实际价格以电商平台实时显示为准。
+- 商品 SKU 可能随时间下架，遇到链接失效时可使用 `/search` 搜同款。
+- 本项目仅用于学习交流，不构成任何消费建议。
